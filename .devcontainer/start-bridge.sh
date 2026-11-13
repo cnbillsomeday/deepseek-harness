@@ -30,8 +30,8 @@ mkdir -p "${DSH_WORKSPACE:-/workspaces/scratch}"
 if pgrep -f "$REPO_ROOT/bridge/server.js" >/dev/null 2>&1; then
   echo "[bridge] already running"
 else
-  nohup node "$REPO_ROOT/bridge/server.js" >>"$LOG" 2>&1 &
-  echo "[bridge] started pid=$! log=$LOG"
+  setsid nohup node "$REPO_ROOT/bridge/server.js" >>"$LOG" 2>&1 </dev/null &
+  echo "[bridge] started (detached)"
 fi
 
 for _ in $(seq 1 30); do
@@ -51,8 +51,8 @@ fi
 # ---- tunnel ----
 if ! pgrep -f "cloudflared tunnel --url" >/dev/null 2>&1; then
   : >"$TUNNEL_LOG"
-  nohup cloudflared tunnel --url "http://127.0.0.1:${PORT}" --no-autoupdate >>"$TUNNEL_LOG" 2>&1 &
-  echo "[tunnel] started pid=$!"
+  setsid nohup cloudflared tunnel --url "http://127.0.0.1:${PORT}" --no-autoupdate >>"$TUNNEL_LOG" 2>&1 </dev/null &
+  echo "[tunnel] started (detached)"
 fi
 
 URL=""
