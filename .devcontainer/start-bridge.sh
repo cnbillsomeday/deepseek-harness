@@ -83,3 +83,22 @@ curl -fsS --max-time 15 -X POST \
   -H 'content-type: application/json' \
   -d "{\"url\":\"${URL}\"}" \
   "${WORKER_URL}/api/register" >/dev/null && echo "[tunnel] registered"
+
+# ---- official web UI ----
+# dsh web only listens on loopback and refuses --host 0.0.0.0, so it sits behind
+# the Codespaces port forwarder. --public-url advertises the address the browser
+# uses and --trusted-host admits that authority through the request fence.
+CS_DOMAIN="${GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN:-app.github.dev}"
+WEB_HOST="${CODESPACE_NAME}-3080.${CS_DOMAIN}"
+WEB_PORT="${DSH_WEB_PORT:-3080}"
+
+if pgrep -f "dsh --profile web" >/dev/null 2>&1; then
+  echo "[web] already running"
+else
+  setsid nohup dsh --profile web \
+    --port "$WEB_PORT" \
+    --public-url "https://${WEB_HOST}/" \
+    --trusted-host "$WEB_HOST" \
+    --no-open >>/tmp/dsh-web.log 2>&1 </dev/null &
+  echo "[web] started for https://${WEB_HOST}/"
+fi

@@ -13,10 +13,14 @@
   },
   "postCreateCommand": "bash .devcontainer/setup.sh",
   "postStartCommand": "bash .devcontainer/start-bridge.sh",
-  "forwardPorts": [8788],
+  "forwardPorts": [8788, 3080],
   "portsAttributes": {
     "8788": {
       "label": "dsh-bridge",
+      "onAutoForward": "silent"
+    },
+    "3080": {
+      "label": "dsh-web",
       "onAutoForward": "silent"
     }
   },
