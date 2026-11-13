@@ -11,6 +11,15 @@ echo "[setup] installing @deepseek-ai/dsh@${DSH_VERSION}"
 
 npm install -g "@deepseek-ai/dsh@${DSH_VERSION}" --no-fund --no-audit
 
+# cloudflared: outbound tunnel so the Worker does not depend on GitHub's
+# port-forwarding visibility, which resets to private on every restart.
+if ! command -v cloudflared >/dev/null 2>&1; then
+  curl -fsSL -o /usr/local/bin/cloudflared \
+    https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+  chmod +x /usr/local/bin/cloudflared
+fi
+cloudflared --version
+
 mkdir -p /workspaces/scratch
 cat > /workspaces/scratch/.gitignore <<'EOF'
 *
