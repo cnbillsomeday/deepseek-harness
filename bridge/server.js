@@ -163,6 +163,7 @@ function startRun(req, res, sessionId, prompt) {
 
   let closed = false;
   let stderrTail = '';
+  let effectiveId = sessionId;
 
   function emit(obj) {
     if (closed) return;
@@ -210,7 +211,8 @@ function startRun(req, res, sessionId, prompt) {
       try {
         const event = JSON.parse(line);
         if (event && event.type === 'session' && event.sessionId) {
-          activeSessions[String(event.sessionId)] = started;
+          effectiveId = String(event.sessionId);
+          activeSessions[effectiveId] = started;
         }
         emit(event);
       } catch (err) {
@@ -244,7 +246,7 @@ function startRun(req, res, sessionId, prompt) {
     clearInterval(heartbeat);
     clearTimeout(killer);
     running = Math.max(0, running - 1);
-    if (sessionId) delete activeSessions[sessionId];
+    if (effectiveId) delete activeSessions[effectiveId];
     closed = true;
     try {
       res.end();
