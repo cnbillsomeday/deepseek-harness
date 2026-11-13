@@ -194,11 +194,12 @@ function handleSessions(req, res) {
       }
     })
     .sort((a, b) => b.mtime - a.mtime)
-    .slice(0, limit)
     .map((entry) => {
       const s = summarizeSession(entry);
       return { id: s.id, title: s.title, updatedAt: s.updatedAt, model: s.model, count: s.messages.length };
-    });
+    })
+    .filter((s) => s.count > 0)
+    .slice(0, limit);
   sendJson(res, 200, { sessions: items });
 }
 
