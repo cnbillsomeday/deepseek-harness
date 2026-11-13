@@ -2,7 +2,10 @@
   "name": "dsh-remote",
   "image": "mcr.microsoft.com/devcontainers/javascript-node:22",
   "features": {
-    "ghcr.io/devcontainers/features/python:1": {}
+    "ghcr.io/devcontainers/features/python:1": {},
+    "ghcr.io/devcontainers/features/sshd:1": {
+      "version": "latest"
+    }
   },
   "remoteEnv": {
     "DSH_WORKSPACE": "/workspaces/scratch",
