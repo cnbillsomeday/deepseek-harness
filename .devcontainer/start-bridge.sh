@@ -110,9 +110,15 @@ if [ -z "$WEB_TUNNEL" ]; then
   tail -n 20 "$WEB_TUNNEL_LOG" >&2 || true
 else
   echo "[web] tunnel: $WEB_TUNNEL"
-  if pgrep -f "dsh --profile web" >/dev/null 2>&1; then
-    echo "[web] already running"
+  RUNNING_CMD=$(pgrep -af "dsh --profile web" 2>/dev/null | head -1 || true)
+  if [ -n "$RUNNING_CMD" ] && [ "${RUNNING_CMD#*"$WEB_TUNNEL"}" != "$RUNNING_CMD" ]; then
+    echo "[web] already running on this tunnel"
   else
+    if [ -n "$RUNNING_CMD" ]; then
+      echo "[web] tunnel changed, restarting"
+      pkill -f "profile we[b]" 2>/dev/null || true
+      sleep 2
+    fi
     setsid nohup dsh --profile web \
       --port "$WEB_PORT" \
       --public-url "https://${WEB_TUNNEL#https://}/" \
