@@ -51,33 +51,43 @@ cat > "$HOME/.dsh/cordis.patch.yml" <<YAML
   config:
     models:
       - id: deepseek-v4.1-flash
+        inputModalities: [text, image]
         contextWindow: 1048576
         maxTokens: 65536
       - id: deepseek-v4-pro
+        inputModalities: [text, image]
         contextWindow: 1048576
         maxTokens: 65536
       - id: glm-5.3
+        inputModalities: [text, image]
         contextWindow: 131072
         maxTokens: 16384
       - id: glm-5.3-flash
+        inputModalities: [text, image]
         contextWindow: 131072
         maxTokens: 16384
       - id: minimax-m3.1-flash
+        inputModalities: [text, image]
         contextWindow: 131072
         maxTokens: 16384
       - id: mimo-v2.6-pro
+        inputModalities: [text, image]
         contextWindow: 131072
         maxTokens: 16384
       - id: mimo-v2.6-flash
+        inputModalities: [text, image]
         contextWindow: 131072
         maxTokens: 16384
       - id: qwen3.8-max
+        inputModalities: [text, image]
         contextWindow: 131072
         maxTokens: 16384
       - id: qwen3.8-flash
+        inputModalities: [text, image]
         contextWindow: 131072
         maxTokens: 16384
       - id: muse-spark-1.3-contributor
+        inputModalities: [text, image]
         contextWindow: 131072
         maxTokens: 16384
 YAML
