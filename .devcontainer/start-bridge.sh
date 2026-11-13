@@ -86,28 +86,47 @@ curl -fsS --max-time 15 -X POST \
 
 # ---- official web UI ----
 # dsh web only listens on loopback and refuses --host 0.0.0.0, so it sits behind
-# the Codespaces port forwarder. --public-url advertises the address the browser
-# uses and --trusted-host admits that authority through the request fence.
-CS_DOMAIN="${GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN:-app.github.dev}"
-WEB_HOST="${CODESPACE_NAME}-3080.${CS_DOMAIN}"
+# its own outbound tunnel. Codespaces port forwarding is unusable here: the
+# forwarding agent never picked up 3080 for this container, and the host shape
+# would also need the launch token anyway.
 WEB_PORT="${DSH_WEB_PORT:-3080}"
+WEB_TUNNEL_LOG=/tmp/cloudflared-web.log
 
-if pgrep -f "dsh --profile web" >/dev/null 2>&1; then
-  echo "[web] already running"
+if ! pgrep -f "cloudflared tunnel --url http://127.0.0.1:${WEB_PORT}" >/dev/null 2>&1; then
+  : >"$WEB_TUNNEL_LOG"
+  setsid nohup cloudflared tunnel --url "http://127.0.0.1:${WEB_PORT}" --no-autoupdate >>"$WEB_TUNNEL_LOG" 2>&1 </dev/null &
+  echo "[web] tunnel started (detached)"
+fi
+
+WEB_TUNNEL=""
+for _ in $(seq 1 45); do
+  WEB_TUNNEL=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$WEB_TUNNEL_LOG" | head -1 || true)
+  [ -n "$WEB_TUNNEL" ] && break
+  sleep 1
+done
+
+if [ -z "$WEB_TUNNEL" ]; then
+  echo "[web] no tunnel url; tail of $WEB_TUNNEL_LOG:" >&2
+  tail -n 20 "$WEB_TUNNEL_LOG" >&2 || true
 else
-  setsid nohup dsh --profile web \
-    --port "$WEB_PORT" \
-    --public-url "https://${WEB_HOST}/" \
-    --trusted-host "$WEB_HOST" \
-    --no-open >>/tmp/dsh-web.log 2>&1 </dev/null &
-  echo "[web] started for https://${WEB_HOST}/"
+  echo "[web] tunnel: $WEB_TUNNEL"
+  if pgrep -f "dsh --profile web" >/dev/null 2>&1; then
+    echo "[web] already running"
+  else
+    setsid nohup dsh --profile web \
+      --port "$WEB_PORT" \
+      --public-url "https://${WEB_TUNNEL#https://}/" \
+      --trusted-host "${WEB_TUNNEL#https://}" \
+      --no-open >>/tmp/dsh-web.log 2>&1 </dev/null &
+    echo "[web] started"
+  fi
 fi
 
 # The launch token is the only way in until the browser exchanges it for a
 # cookie, so publish the full URL for the Worker to hand out.
 WEB_TOKEN_URL=""
 for _ in $(seq 1 40); do
-  WEB_TOKEN_URL=$(grep -oE "https://[a-z0-9-]+\.app\.github\.dev/\?token=[A-Za-z0-9_-]+" /tmp/dsh-web.log | tail -1 || true)
+  WEB_TOKEN_URL=$(grep -oE "https://[a-z0-9-]+\.trycloudflare\.com/\?token=[A-Za-z0-9_-]+" /tmp/dsh-web.log | tail -1 || true)
   [ -n "$WEB_TOKEN_URL" ] && break
   sleep 1
 done
