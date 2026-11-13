@@ -7,21 +7,27 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DSH_VERSION="${DSH_VERSION:-latest}"
 
 echo "[setup] repo: $REPO_ROOT"
+echo "[setup] node: $(node -v) npm: $(npm -v)"
 echo "[setup] installing @deepseek-ai/dsh@${DSH_VERSION}"
 
-npm install -g "@deepseek-ai/dsh@${DSH_VERSION}" --no-fund --no-audit
+SUDO=""
+if [ "$(id -u)" != "0" ]; then
+  SUDO="sudo"
+fi
+
+$SUDO npm install -g "@deepseek-ai/dsh@${DSH_VERSION}" --no-fund --no-audit
 
 # cloudflared: outbound tunnel so the Worker does not depend on GitHub's
 # port-forwarding visibility, which resets to private on every restart.
 if ! command -v cloudflared >/dev/null 2>&1; then
-  curl -fsSL -o /usr/local/bin/cloudflared \
+  $SUDO curl -fsSL -o /usr/local/bin/cloudflared \
     https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
-  chmod +x /usr/local/bin/cloudflared
+  $SUDO chmod +x /usr/local/bin/cloudflared
 fi
 cloudflared --version
 
-mkdir -p /workspaces/scratch
-cat > /workspaces/scratch/.gitignore <<'EOF'
+mkdir -p "${DSH_WORKSPACE:-/workspaces/scratch}"
+cat > "${DSH_WORKSPACE:-/workspaces/scratch}/.gitignore" <<'EOF'
 *
 !.gitignore
 EOF

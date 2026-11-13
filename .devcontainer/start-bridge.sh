@@ -10,6 +10,15 @@ TUNNEL_LOG=/tmp/cloudflared.log
 WORKER_URL="${WORKER_URL:-https://dsh-remote.cnbill.workers.dev}"
 PORT="${BRIDGE_PORT:-8788}"
 
+# postStartCommand does not always receive Codespaces secret env vars; the
+# same values are materialised in the shared env file, so fall back to it.
+if [ -z "${BRIDGE_TOKEN:-}" ] && [ -f /workspaces/.codespaces/shared/.env ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . /workspaces/.codespaces/shared/.env
+  set +a
+fi
+
 if [ -z "${BRIDGE_TOKEN:-}" ]; then
   echo "[bridge] BRIDGE_TOKEN is not set; refusing to start an unauthenticated listener" >&2
   exit 1
