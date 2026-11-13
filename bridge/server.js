@@ -197,7 +197,14 @@ function handleSessions(req, res) {
     .sort((a, b) => b.mtime - a.mtime)
     .map((entry) => {
       const s = summarizeSession(entry);
-      return { id: s.id, title: s.title, updatedAt: s.updatedAt, model: s.model, count: s.messages.length };
+      return {
+        id: s.id,
+        title: s.title,
+        updatedAt: s.updatedAt,
+        model: s.model,
+        preset: s.preset,
+        count: s.messages.length,
+      };
     })
     .filter((s) => s.count > 0 && !s.preset)
     .slice(0, limit);
