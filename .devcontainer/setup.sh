@@ -46,6 +46,12 @@ cat > "$HOME/.dsh/cordis.patch.yml" <<YAML
   config:
     provider: deepseek-official
     model: ${MODEL_ID}
+- id: llm-deepseek
+  config:
+    models:
+      - id: ${MODEL_ID}
+        contextWindow: 1048576
+        maxTokens: 65536
 YAML
 echo "[setup] model: ${MODEL_ID}"
 
