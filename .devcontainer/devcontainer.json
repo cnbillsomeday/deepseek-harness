@@ -1,0 +1,25 @@
+{
+  "name": "dsh-remote",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:22",
+  "features": {
+    "ghcr.io/devcontainers/features/python:1": {}
+  },
+  "remoteEnv": {
+    "DSH_WORKSPACE": "/workspaces/scratch",
+    "BRIDGE_PORT": "8788"
+  },
+  "postCreateCommand": "bash .devcontainer/setup.sh",
+  "postStartCommand": "bash .devcontainer/start-bridge.sh",
+  "forwardPorts": [8788],
+  "portsAttributes": {
+    "8788": {
+      "label": "dsh-bridge",
+      "onAutoForward": "silent"
+    }
+  },
+  "hostRequirements": {
+    "cpus": 2,
+    "memory": "8gb",
+    "storage": "16gb"
+  }
+}

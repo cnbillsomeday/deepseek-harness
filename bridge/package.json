@@ -1,0 +1,13 @@
+{
+  "name": "dsh-bridge",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Thin HTTP/NDJSON shim around `dsh --profile headless --json` for phone clients",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
