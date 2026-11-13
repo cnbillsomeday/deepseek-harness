@@ -102,3 +102,22 @@ else
     --no-open >>/tmp/dsh-web.log 2>&1 </dev/null &
   echo "[web] started for https://${WEB_HOST}/"
 fi
+
+# The launch token is the only way in until the browser exchanges it for a
+# cookie, so publish the full URL for the Worker to hand out.
+WEB_TOKEN_URL=""
+for _ in $(seq 1 40); do
+  WEB_TOKEN_URL=$(grep -oE "https://[a-z0-9-]+\.app\.github\.dev/\?token=[A-Za-z0-9_-]+" /tmp/dsh-web.log | tail -1 || true)
+  [ -n "$WEB_TOKEN_URL" ] && break
+  sleep 1
+done
+
+if [ -n "$WEB_TOKEN_URL" ]; then
+  curl -fsS --max-time 15 -X POST \
+    -H "X-Token: ${BRIDGE_TOKEN}" \
+    -H 'content-type: application/json' \
+    -d "{\"url\":\"${WEB_TOKEN_URL}\"}" \
+    "${WORKER_URL}/api/register-web" >/dev/null && echo "[web] registered"
+else
+  echo "[web] no launch token yet; check /tmp/dsh-web.log" >&2
+fi
