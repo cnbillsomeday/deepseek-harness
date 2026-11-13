@@ -6,46 +6,293 @@
  * Runs inside the Codespace on 127.0.0.1:8788. Never exposed directly: every
  * request must carry the shared token injected by the Worker.
  *
- * Wire format: newline-delimited JSON (NDJSON). The Worker proxies it to the
- * phone unchanged. Events we add ourselves are tagged `type` values that dsh
- * does not emit: bridge, ping, stderr, exit.
+ * Wire format for runs: newline-delimited JSON (NDJSON). Events added by this
+ * process are `bridge`, `ping`, `stderr` and `exit`; everything else comes from
+ * dsh's own `--json` projection.
  */
 
 const http = require('http');
 const { spawn, execFile } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const zlib = require('zlib');
 
 const PORT = Number(process.env.BRIDGE_PORT || 8788);
 const TOKEN = process.env.BRIDGE_TOKEN || '';
 const WORKSPACE = process.env.DSH_WORKSPACE || '/workspaces/scratch';
+const DSH_HOME = process.env.DSH_HOME || path.join(process.env.HOME || '/home/node', '.dsh');
 const DSH_BIN = process.env.DSH_BIN || 'dsh';
 const MAX_CONCURRENT = Number(process.env.BRIDGE_MAX_RUNS || 2);
-const MAX_BODY = 256 * 1024;
+const MAX_BODY = 25 * 1024 * 1024;
 const MAX_STDERR = 8 * 1024;
 const HEARTBEAT_MS = 10000;
 const RUN_TIMEOUT_MS = Number(process.env.BRIDGE_RUN_TIMEOUT_MS || 45 * 60 * 1000);
+const MODEL_PATCH = path.join(DSH_HOME, 'per-run-model.patch.yml');
+
+const PERMISSIONS = {
+  'read-only': true,
+  'workspace-write': true,
+  'danger-full-access': true,
+};
 
 let running = 0;
 const activeSessions = Object.create(null);
 let dshVersion = null;
 
 function log() {
-  const args = Array.prototype.slice.call(arguments);
-  console.log(new Date().toISOString(), args.join(' '));
+  console.log(new Date().toISOString(), Array.prototype.slice.call(arguments).join(' '));
 }
 
-function ensureWorkspace() {
+function ensureDirs() {
   try {
     fs.mkdirSync(WORKSPACE, { recursive: true });
+    fs.mkdirSync(path.join(WORKSPACE, '.uploads'), { recursive: true });
   } catch (err) {
-    log('workspace mkdir failed:', err.message);
+    log('mkdir failed:', err.message);
   }
 }
 
-function dshArgs(sessionId) {
-  const args = ['--profile', 'headless', '--json'];
-  if (sessionId) args.push('--session-id', String(sessionId));
+/* ---------- model catalog ---------- */
+
+function modelCatalog() {
+  const pick = (p, out) => {
+    try {
+      const text = fs.readFileSync(p, 'utf8');
+      const lines = text.split('\n');
+      let inModels = false;
+      for (const line of lines) {
+        if (/^\s*models:\s*$/.test(line)) {
+          inModels = true;
+          continue;
+        }
+        if (inModels) {
+          const m = line.match(/^\s*-\s*id:\s*([A-Za-z0-9._-]+)\s*$/);
+          if (m) out.push(m[1]);
+          else if (/^\s*-\s+id:/.test(line) === false && /^[^\s]/.test(line)) inModels = false;
+        }
+      }
+    } catch (err) {
+      /* missing file */
+    }
+  };
+  const out = [];
+  pick(path.join(DSH_HOME, 'cordis.patch.yml'), out);
+  pick(path.join(DSH_HOME, 'profiles', 'headless', 'cordis.patch.yml'), out);
+  return Array.from(new Set(out));
+}
+
+/* ---------- session history ---------- */
+
+function sessionDirs() {
+  const root = path.join(DSH_HOME, 'sessions');
+  let entries = [];
+  try {
+    entries = fs.readdirSync(root, { withFileTypes: true });
+  } catch (err) {
+    return [];
+  }
+  const dirs = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const group = path.join(root, entry.name);
+    let subs = [];
+    try {
+      subs = fs.readdirSync(group, { withFileTypes: true });
+    } catch (err) {
+      continue;
+    }
+    for (const sub of subs) {
+      if (!sub.isDirectory()) continue;
+      const full = path.join(group, sub.name);
+      const logPath = sessionLogPath(full);
+      if (!logPath) continue;
+      let stat;
+      try {
+        stat = fs.statSync(logPath);
+      } catch (err) {
+        continue;
+      }
+      dirs.push({ id: sub.name, dir: full, logPath, mtime: stat.mtimeMs });
+    }
+  }
+  return dirs;
+}
+
+function sessionLogPath(dir) {
+  const candidates = ['session.v4.jsonl.zstd', 'session.v4.jsonl', 'session.jsonl'];
+  for (const name of candidates) {
+    const p = path.join(dir, name);
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
+
+function readSessionLog(logPath) {
+  const raw = fs.readFileSync(logPath);
+  const isZstd = logPath.endsWith('.zstd');
+  const text = isZstd ? zlib.zstdDecompressSync(raw).toString('utf8') : raw.toString('utf8');
+  return text.split('\n').filter(Boolean);
+}
+
+function textOf(content) {
+  if (!Array.isArray(content)) return '';
+  return content
+    .filter((c) => c && c.type === 'text' && typeof c.text === 'string')
+    .map((c) => c.text)
+    .join('\n');
+}
+
+function summarizeSession(entry) {
+  const out = { id: entry.id, title: '', updatedAt: entry.mtime, model: '', cwd: '', messages: [] };
+  let lines;
+  try {
+    lines = readSessionLog(entry.logPath);
+  } catch (err) {
+    return out;
+  }
+  for (const line of lines) {
+    let ev;
+    try {
+      ev = JSON.parse(line);
+    } catch (err) {
+      continue;
+    }
+    const data = ev.data || {};
+    if (ev.type === 'session') {
+      out.cwd = data.cwd || '';
+    } else if (ev.type === 'session/title' && data.title) {
+      out.title = String(data.title);
+    } else if (ev.type === 'user/message') {
+      const text = textOf(data.content);
+      if (text) out.messages.push({ role: 'user', text });
+    } else if (ev.type === 'assistant/message') {
+      const msg = data.message || {};
+      const text = textOf(msg.content);
+      if (msg.source && msg.source.model) out.model = msg.source.model;
+      if (text) out.messages.push({ role: 'assistant', text });
+    }
+  }
+  if (!out.title) {
+    const firstUser = out.messages.find((m) => m.role === 'user');
+    out.title = firstUser ? firstUser.text.slice(0, 40) : out.id;
+  }
+  return out;
+}
+
+function handleSessions(req, res) {
+  const limit = 50;
+  const items = sessionDirs()
+    .filter((entry) => {
+      try {
+        const first = readSessionLog(entry.logPath)[0];
+        const ev = JSON.parse(first);
+        return !ev.data || !ev.data.cwd || ev.data.cwd === WORKSPACE;
+      } catch (err) {
+        return true;
+      }
+    })
+    .sort((a, b) => b.mtime - a.mtime)
+    .slice(0, limit)
+    .map((entry) => {
+      const s = summarizeSession(entry);
+      return { id: s.id, title: s.title, updatedAt: s.updatedAt, model: s.model, count: s.messages.length };
+    });
+  sendJson(res, 200, { sessions: items });
+}
+
+function handleSession(req, res, query) {
+  const id = String(query.get('id') || '');
+  if (!id) return sendJson(res, 400, { error: 'missing id' });
+  const entry = sessionDirs().find((e) => e.id === id);
+  if (!entry) return sendJson(res, 404, { error: 'not found' });
+  const s = summarizeSession(entry);
+  sendJson(res, 200, { id: s.id, title: s.title, model: s.model, messages: s.messages });
+}
+
+/* ---------- files ---------- */
+
+const MIME = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml',
+  '.txt': 'text/plain; charset=utf-8',
+  '.md': 'text/markdown; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.pdf': 'application/pdf',
+  '.zip': 'application/zip',
+  '.csv': 'text/csv; charset=utf-8',
+};
+
+function safeResolve(p) {
+  const abs = path.resolve(WORKSPACE, p);
+  if (abs !== WORKSPACE && !abs.startsWith(WORKSPACE + path.sep)) return null;
+  return abs;
+}
+
+function handleFile(req, res, query) {
+  const rel = String(query.get('path') || '');
+  const abs = safeResolve(rel);
+  if (!abs) return sendJson(res, 400, { error: 'bad path' });
+  let stat;
+  try {
+    stat = fs.statSync(abs);
+  } catch (err) {
+    return sendJson(res, 404, { error: 'not found' });
+  }
+  if (!stat.isFile()) return sendJson(res, 404, { error: 'not a file' });
+  const type = MIME[path.extname(abs).toLowerCase()] || 'application/octet-stream';
+  res.writeHead(200, {
+    'content-type': type,
+    'content-length': stat.size,
+    'cache-control': 'private, max-age=60',
+  });
+  fs.createReadStream(abs).pipe(res);
+}
+
+function handleUpload(req, res, query) {
+  const name = path.basename(String(query.get('name') || 'upload.bin')).replace(/[^\w.\-]/g, '_');
+  const target = path.join(WORKSPACE, '.uploads', Date.now() + '-' + name);
+  const chunks = [];
+  let size = 0;
+  req.on('data', (chunk) => {
+    size += chunk.length;
+    if (size > MAX_BODY) {
+      req.destroy();
+      return;
+    }
+    chunks.push(chunk);
+  });
+  req.on('end', () => {
+    try {
+      fs.writeFileSync(target, Buffer.concat(chunks));
+      sendJson(res, 200, { path: target, name, size });
+    } catch (err) {
+      sendJson(res, 500, { error: err.message });
+    }
+  });
+}
+
+/* ---------- runs ---------- */
+
+function writeModelPatch(model) {
+  const yml =
+    '- id: agent-default-model\n' +
+    '  config:\n' +
+    '    provider: deepseek-official\n' +
+    '    model: ' + model + '\n';
+  fs.writeFileSync(MODEL_PATCH, yml);
+  return MODEL_PATCH;
+}
+
+function dshArgs(opts) {
+  const args = ['--profile', 'headless'];
+  if (opts.model) args.push('--patch', writeModelPatch(opts.model));
+  args.push('--json');
+  if (opts.permission) args.push('--permission-mode', opts.permission, '--approval-policy', 'never');
+  if (opts.sessionId) args.push('--session-id', String(opts.sessionId));
   args.push('-');
   return args;
 }
@@ -105,13 +352,13 @@ function probeVersion() {
 }
 
 function handleHealth(req, res) {
-  const hasKey = Boolean(process.env.DEEPSEEK_API_KEY);
   sendJson(res, 200, {
     ok: true,
     dsh: dshVersion,
     workspace: WORKSPACE,
-    credential: hasKey,
+    credential: Boolean(process.env.DEEPSEEK_API_KEY),
     running: running,
+    models: modelCatalog(),
     sessions: Object.keys(activeSessions),
   });
 }
@@ -134,6 +381,10 @@ function handleRun(req, res) {
       }
 
       const sessionId = payload.session_id ? String(payload.session_id) : '';
+      const model = payload.model ? String(payload.model) : '';
+      let permission = payload.permission ? String(payload.permission) : '';
+      if (permission && !PERMISSIONS[permission]) permission = '';
+
       if (sessionId && activeSessions[sessionId]) {
         sendJson(res, 409, { error: 'session busy', session_id: sessionId });
         return;
@@ -143,17 +394,17 @@ function handleRun(req, res) {
         return;
       }
 
-      startRun(req, res, sessionId, prompt);
+      startRun(req, res, { sessionId, prompt, model, permission });
     })
     .catch(function (err) {
       sendJson(res, 413, { error: err.message });
     });
 }
 
-function startRun(req, res, sessionId, prompt) {
+function startRun(req, res, opts) {
   const started = Date.now();
   running += 1;
-  if (sessionId) activeSessions[sessionId] = started;
+  if (opts.sessionId) activeSessions[opts.sessionId] = started;
 
   res.writeHead(200, {
     'content-type': 'application/x-ndjson; charset=utf-8',
@@ -163,7 +414,7 @@ function startRun(req, res, sessionId, prompt) {
 
   let closed = false;
   let stderrTail = '';
-  let effectiveId = sessionId;
+  let effectiveId = opts.sessionId;
 
   function emit(obj) {
     if (closed) return;
@@ -174,9 +425,27 @@ function startRun(req, res, sessionId, prompt) {
     }
   }
 
-  emit({ type: 'bridge', phase: 'spawn', session_id: sessionId || null, cwd: WORKSPACE });
+  emit({
+    type: 'bridge',
+    phase: 'spawn',
+    session_id: opts.sessionId || null,
+    cwd: WORKSPACE,
+    model: opts.model || null,
+    permission: opts.permission || null,
+  });
 
-  const child = spawn(DSH_BIN, dshArgs(sessionId), {
+  let args;
+  try {
+    args = dshArgs(opts);
+  } catch (err) {
+    emit({ type: 'error', message: 'patch failed: ' + err.message });
+    emit({ type: 'exit', code: 1 });
+    running -= 1;
+    res.end();
+    return;
+  }
+
+  const child = spawn(DSH_BIN, args, {
     cwd: WORKSPACE,
     env: Object.assign({}, process.env, {
       DSH_WORKSPACE: WORKSPACE,
@@ -266,43 +535,40 @@ function startRun(req, res, sessionId, prompt) {
   });
 
   try {
-    child.stdin.end(prompt, 'utf8');
+    child.stdin.end(opts.prompt, 'utf8');
   } catch (err) {
     emit({ type: 'error', message: 'stdin failed: ' + err.message });
   }
 }
 
-function route(req, res) {
-  const url = req.url.split('?')[0];
+/* ---------- router ---------- */
 
-  if (url === '/health') {
-    if (!authorized(req)) {
-      sendJson(res, 401, { error: 'unauthorized' });
-      return;
-    }
-    handleHealth(req, res);
-    return;
-  }
+function route(req, res, query) {
+  const url = req.url.split('?')[0];
 
   if (!authorized(req)) {
     sendJson(res, 401, { error: 'unauthorized' });
     return;
   }
 
-  if (url === '/run' && req.method === 'POST') {
-    handleRun(req, res);
-    return;
-  }
+  if (url === '/health') return handleHealth(req, res);
+  if (url === '/models') return sendJson(res, 200, { models: modelCatalog() });
+  if (url === '/sessions') return handleSessions(req, res);
+  if (url === '/session') return handleSession(req, res, query);
+  if (url === '/file') return handleFile(req, res, query);
+  if (url === '/upload' && req.method === 'POST') return handleUpload(req, res, query);
+  if (url === '/run' && req.method === 'POST') return handleRun(req, res);
 
   sendJson(res, 404, { error: 'not found' });
 }
 
-ensureWorkspace();
+ensureDirs();
 probeVersion();
 
 const server = http.createServer(function (req, res) {
+  const query = new URL(req.url, 'http://127.0.0.1').searchParams;
   try {
-    route(req, res);
+    route(req, res, query);
   } catch (err) {
     log('route error:', err && err.stack ? err.stack : String(err));
     try {
