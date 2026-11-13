@@ -15,7 +15,9 @@ if [ "$(id -u)" != "0" ]; then
   SUDO="sudo"
 fi
 
-$SUDO npm install -g "@deepseek-ai/dsh@${DSH_VERSION}" --no-fund --no-audit
+$SUDO npm install -g "@deepseek-ai/dsh@${DSH_VERSION}" \
+  --allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs \
+  --no-fund --no-audit
 
 # cloudflared: outbound tunnel so the Worker does not depend on GitHub's
 # port-forwarding visibility, which resets to private on every restart.
