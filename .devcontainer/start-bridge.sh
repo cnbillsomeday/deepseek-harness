@@ -12,7 +12,7 @@ PORT="${BRIDGE_PORT:-8788}"
 
 # postStartCommand does not always receive Codespaces secret env vars; the
 # same values are materialised in the shared env file, so fall back to it.
-if [ -z "${BRIDGE_TOKEN:-}" ] && [ -f /workspaces/.codespaces/shared/.env ]; then
+if [ -f /workspaces/.codespaces/shared/.env ]; then
   set -a
   # shellcheck disable=SC1091
   . /workspaces/.codespaces/shared/.env
