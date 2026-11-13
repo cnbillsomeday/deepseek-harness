@@ -163,6 +163,8 @@ function summarizeSession(entry) {
     } else if (ev.type === 'session/title' && data.title) {
       out.title = String(data.title);
     } else if (ev.type === 'user/message') {
+      const kind = data.source && data.source.kind;
+      if (kind && kind !== 'user') continue;
       const text = textOf(data.content);
       if (text) out.messages.push({ role: 'user', text });
     } else if (ev.type === 'assistant/message') {
