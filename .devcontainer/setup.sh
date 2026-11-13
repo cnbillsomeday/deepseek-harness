@@ -39,7 +39,8 @@ EOF
 MODEL_ID="${DSH_MODEL:-deepseek-v4.1-flash}"
 # Home-level patch, not the profile patch: the web UI rewrites
 # $DSH_HOME/profiles/web/cordis.patch.yml when settings are saved, which would
-# silently drop the model choice.
+# silently drop the model choice. Replacing `models` replaces the whole catalog,
+# so every id this relay serves has to be listed explicitly.
 mkdir -p "$HOME/.dsh"
 cat > "$HOME/.dsh/cordis.patch.yml" <<YAML
 - id: agent-default-model
@@ -49,11 +50,38 @@ cat > "$HOME/.dsh/cordis.patch.yml" <<YAML
 - id: llm-deepseek
   config:
     models:
-      - id: ${MODEL_ID}
+      - id: deepseek-v4.1-flash
         contextWindow: 1048576
         maxTokens: 65536
+      - id: deepseek-v4-pro
+        contextWindow: 1048576
+        maxTokens: 65536
+      - id: glm-5.3
+        contextWindow: 131072
+        maxTokens: 16384
+      - id: glm-5.3-flash
+        contextWindow: 131072
+        maxTokens: 16384
+      - id: minimax-m3.1-flash
+        contextWindow: 131072
+        maxTokens: 16384
+      - id: mimo-v2.6-pro
+        contextWindow: 131072
+        maxTokens: 16384
+      - id: mimo-v2.6-flash
+        contextWindow: 131072
+        maxTokens: 16384
+      - id: qwen3.8-max
+        contextWindow: 131072
+        maxTokens: 16384
+      - id: qwen3.8-flash
+        contextWindow: 131072
+        maxTokens: 16384
+      - id: muse-spark-1.3-contributor
+        contextWindow: 131072
+        maxTokens: 16384
 YAML
-echo "[setup] model: ${MODEL_ID}"
+echo "[setup] model: ${MODEL_ID} (10 catalog entries)"
 
 # Warm the profile so the first real run does not pay template setup cost.
 DSH_HOME="${DSH_HOME:-$HOME/.dsh}" dsh --profile headless --help >/dev/null 2>&1 || true
