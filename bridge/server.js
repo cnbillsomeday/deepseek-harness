@@ -143,7 +143,7 @@ function textOf(content) {
 }
 
 function summarizeSession(entry) {
-  const out = { id: entry.id, title: '', updatedAt: entry.mtime, model: '', cwd: '', messages: [] };
+  const out = { id: entry.id, title: '', updatedAt: entry.mtime, model: '', cwd: '', preset: '', messages: [] };
   let lines;
   try {
     lines = readSessionLog(entry.logPath);
@@ -159,7 +159,8 @@ function summarizeSession(entry) {
     }
     const data = ev.data || {};
     if (ev.type === 'session') {
-      out.cwd = data.cwd || '';
+      out.cwd = ev.cwd || data.cwd || '';
+      out.preset = ev.agentPreset || '';
     } else if (ev.type === 'session/title' && data.title) {
       out.title = String(data.title);
     } else if (ev.type === 'user/message') {
@@ -198,7 +199,7 @@ function handleSessions(req, res) {
       const s = summarizeSession(entry);
       return { id: s.id, title: s.title, updatedAt: s.updatedAt, model: s.model, count: s.messages.length };
     })
-    .filter((s) => s.count > 0)
+    .filter((s) => s.count > 0 && !s.preset)
     .slice(0, limit);
   sendJson(res, 200, { sessions: items });
 }
@@ -209,7 +210,14 @@ function handleSession(req, res, query) {
   const entry = sessionDirs().find((e) => e.id === id);
   if (!entry) return sendJson(res, 404, { error: 'not found' });
   const s = summarizeSession(entry);
-  sendJson(res, 200, { id: s.id, title: s.title, model: s.model, messages: s.messages });
+  sendJson(res, 200, {
+    id: s.id,
+    title: s.title,
+    model: s.model,
+    preset: s.preset,
+    writable: !s.preset,
+    messages: s.messages,
+  });
 }
 
 /* ---------- files ---------- */
@@ -276,6 +284,28 @@ function handleUpload(req, res, query) {
       sendJson(res, 500, { error: err.message });
     }
   });
+}
+
+
+function sessionPreset(id) {
+  const entry = sessionDirs().find((e) => e.id === id);
+  if (!entry) return '';
+  try {
+    const ev = JSON.parse(readSessionLog(entry.logPath)[0]);
+    return ev.agentPreset || '';
+  } catch (err) {
+    return '';
+  }
+}
+
+function sendNdjsonError(res, message) {
+  res.writeHead(200, {
+    'content-type': 'application/x-ndjson; charset=utf-8',
+    'cache-control': 'no-store',
+  });
+  res.write(JSON.stringify({ type: 'error', message }) + '\n');
+  res.write(JSON.stringify({ type: 'exit', code: 1 }) + '\n');
+  res.end();
 }
 
 /* ---------- runs ---------- */
@@ -395,6 +425,17 @@ function handleRun(req, res) {
       if (running >= MAX_CONCURRENT) {
         sendJson(res, 429, { error: 'busy', running: running });
         return;
+      }
+
+      if (sessionId) {
+        const preset = sessionPreset(sessionId);
+        if (preset) {
+          sendNdjsonError(
+            res,
+            '这个会话是在桌面版（预设 ' + preset + '）里建的，手机端的 headless 运行器接管不了。请点「新对话」重新开始。',
+          );
+          return;
+        }
       }
 
       startRun(req, res, { sessionId, prompt, model, permission });
