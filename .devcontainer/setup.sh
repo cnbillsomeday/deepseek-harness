@@ -37,15 +37,16 @@ EOF
 # Pick the model this deployment talks to. The relay is OpenAI/Anthropic
 # compatible but the model id is not in dsh's built-in catalog, so pin it.
 MODEL_ID="${DSH_MODEL:-deepseek-v4.1-flash}"
-for P in headless web; do
-  mkdir -p "$HOME/.dsh/profiles/$P"
-  cat > "$HOME/.dsh/profiles/$P/cordis.patch.yml" <<YAML
+# Home-level patch, not the profile patch: the web UI rewrites
+# $DSH_HOME/profiles/web/cordis.patch.yml when settings are saved, which would
+# silently drop the model choice.
+mkdir -p "$HOME/.dsh"
+cat > "$HOME/.dsh/cordis.patch.yml" <<YAML
 - id: agent-default-model
   config:
     provider: deepseek-official
     model: ${MODEL_ID}
 YAML
-done
 echo "[setup] model: ${MODEL_ID}"
 
 # Warm the profile so the first real run does not pay template setup cost.
